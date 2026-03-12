@@ -1367,6 +1367,7 @@ pub const Session = struct {
 };
 
 fn loadSoftHSM2() !Library {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
     const path = std.posix.getenv("SOFTHSM2_PATH") orelse
         return error.SkipZigTest;
     return Library.load(path);
