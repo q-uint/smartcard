@@ -1,15 +1,19 @@
 # smartcard
 
-Experimental Zig library for smart card communication on macOS. This is a personal project for playing around with card readers and is provided as-is with no guarantees.
+Experimental Zig library for smart card communication. This is a personal project for playing around with card readers and is provided as-is with no guarantees.
 
-- **pcsc** -- direct card access via macOS PCSC.framework (no dependencies)
+- **pcsc** -- direct card access via the platform PC/SC provider (no dependencies)
 - **pkcs11** -- bindings for [PKCS#11](https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.1/os/pkcs11-spec-v3.1-os.html) v3.1 middleware
 - **iso7816** -- [ISO 7816-4](https://www.iso.org/standard/77180.html) APDU command building and response parsing
 - **tlv** -- [BER-TLV](https://www.iso.org/standard/77180.html) (ISO 7816-4 Annex D) encoding and decoding
 
 ## Platform
 
-macOS only (aarch64-darwin). Links against the built-in PCSC.framework.
+| OS | PC/SC provider | Status |
+|----|---------------|--------|
+| macOS | PCSC.framework (built-in) | Tested |
+| Linux | pcsclite (`libpcsclite-dev`) | Tested |
+| Windows | winscard (built-in) | Tested |
 
 ## Usage
 
@@ -50,7 +54,13 @@ const info = try lib.getInfo();
 zig build test
 ```
 
-PKCS#11 tests run against [SoftHSM2](https://github.com/opendnssec/SoftHSMv2) if available. If `softhsm2-util` is not on PATH, those tests are skipped.
+PKCS#11 tests run against [SoftHSM2](https://github.com/opendnssec/SoftHSMv2) if available. If `softhsm2-util` is not on PATH, those tests are skipped. PC/SC tests require a running smartcard daemon and skip gracefully if unavailable.
+
+On Linux, install the pcsclite development headers:
+
+```sh
+sudo apt install libpcsclite-dev  # Debian/Ubuntu
+```
 
 ## References
 
@@ -60,3 +70,4 @@ PKCS#11 tests run against [SoftHSM2](https://github.com/opendnssec/SoftHSMv2) if
 - [PKCS#11 v3.1 Header Files](https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.1/os/include/pkcs11-v3.1/) -- C header files
 - [SoftHSM2](https://github.com/opendnssec/SoftHSMv2) -- Software HSM for testing PKCS#11
 - [Apple CryptoTokenKit / PCSC.framework](https://developer.apple.com/documentation/cryptotokenkit) -- macOS smart card framework
+- [pcsclite](https://pcsclite.apdu.fr/) -- Linux PC/SC middleware

@@ -8,16 +8,29 @@
   outputs =
     { self, nixpkgs }:
     let
-      system = "aarch64-darwin";
-      pkgs = nixpkgs.legacyPackages.${system};
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs [
+          "aarch64-darwin"
+          "x86_64-darwin"
+          "x86_64-linux"
+          "aarch64-linux"
+        ] (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      devShells.${system}.default = pkgs.mkShellNoCC {
-        buildInputs = with pkgs; [
-          zig
-          zls
-          softhsm
-        ];
-      };
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShellNoCC {
+          buildInputs =
+            with pkgs;
+            [
+              zig
+              zls
+              softhsm
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pcsclite
+            ];
+        };
+      });
     };
 }

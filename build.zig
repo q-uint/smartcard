@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -9,8 +10,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    if (sdkFrameworkPath(b)) |path| mod.addFrameworkPath(path);
-    mod.linkFramework("PCSC", .{});
+    linkPcsc(mod, b);
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
@@ -26,6 +26,23 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+}
+
+fn linkPcsc(mod: *std.Build.Module, b: *std.Build) void {
+    const resolved = mod.resolved_target orelse return;
+    switch (resolved.result.os.tag) {
+        .macos => {
+            if (sdkFrameworkPath(b)) |path| mod.addFrameworkPath(path);
+            mod.linkFramework("PCSC", .{});
+        },
+        .linux => {
+            mod.linkSystemLibrary("pcsclite", .{});
+        },
+        .windows => {
+            mod.linkSystemLibrary("winscard", .{});
+        },
+        else => {},
+    }
 }
 
 const SoftHsm2Env = struct {
@@ -47,11 +64,29 @@ fn softhsm2Setup(b: *std.Build) ?SoftHsm2Env {
     const bin_path = std.mem.trimRight(u8, result.stdout, "\n\r ");
     const bin_dir = std.fs.path.dirname(bin_path) orelse return null;
     const base_dir = std.fs.path.dirname(bin_dir) orelse return null;
-    const lib_path = std.fs.path.join(b.allocator, &.{ base_dir, "lib", "softhsm", "libsofthsm2.so" }) catch return null;
 
-    std.fs.accessAbsolute(lib_path, .{}) catch {
-        b.allocator.free(lib_path);
-        return null;
+    const lib_ext = switch (builtin.os.tag) {
+        .macos => "dylib",
+        .windows => "dll",
+        else => "so",
+    };
+    const lib_name = std.fmt.allocPrint(b.allocator, "libsofthsm2.{s}", .{lib_ext}) catch return null;
+    const lib_path = std.fs.path.join(b.allocator, &.{ base_dir, "lib", "softhsm", lib_name }) catch return null;
+
+    // On Nix/macOS the library may use .so even on Darwin.
+    const checked_path = blk: {
+        std.fs.accessAbsolute(lib_path, .{}) catch {
+            if (builtin.os.tag == .macos) {
+                const so_name = std.fs.path.join(b.allocator, &.{ base_dir, "lib", "softhsm", "libsofthsm2.so" }) catch return null;
+                std.fs.accessAbsolute(so_name, .{}) catch {
+                    b.allocator.free(so_name);
+                    return null;
+                };
+                break :blk so_name;
+            }
+            return null;
+        };
+        break :blk lib_path;
     };
 
     // Create temp token directory and config file under the build cache.
@@ -71,7 +106,7 @@ fn softhsm2Setup(b: *std.Build) ?SoftHsm2Env {
     const conf_path = b.allocator.dupe(u8, tmp_dir.realpath("softhsm2.conf", &conf_buf) catch return null) catch return null;
 
     return .{
-        .lib_path = lib_path,
+        .lib_path = checked_path,
         .conf_path = conf_path,
     };
 }
