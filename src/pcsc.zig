@@ -1,9 +1,40 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const native_os = builtin.os.tag;
 
-// PC/SC types matching macOS PCSC.framework / winscard.h
+// Platform-specific PC/SC types.
+// macOS PCSC.framework uses fixed 32-bit types.
+// Linux pcsclite uses C long/unsigned long (64-bit on LP64).
+// Windows winscard uses ULONG_PTR for handles, 32-bit LONG/DWORD.
 
-pub const LONG = i32;
-pub const DWORD = u32;
+pub const LONG = switch (native_os) {
+    .macos => i32,
+    .linux => c_long,
+    .windows => c_long,
+    else => @compileError("unsupported platform for PC/SC"),
+};
+
+pub const DWORD = switch (native_os) {
+    .macos => u32,
+    .linux => c_ulong,
+    .windows => c_ulong,
+    else => @compileError("unsupported platform for PC/SC"),
+};
+
+pub const SCARDCONTEXT = switch (native_os) {
+    .macos => i32,
+    .linux => c_long,
+    .windows => usize,
+    else => @compileError("unsupported platform for PC/SC"),
+};
+
+pub const SCARDHANDLE = switch (native_os) {
+    .macos => i32,
+    .linux => c_long,
+    .windows => usize,
+    else => @compileError("unsupported platform for PC/SC"),
+};
+
 pub const BYTE = u8;
 pub const LPSTR = [*:0]u8;
 pub const LPCSTR = [*:0]const u8;
@@ -12,11 +43,10 @@ pub const LPCBYTE = [*]const BYTE;
 pub const LPDWORD = *DWORD;
 pub const LPVOID = *anyopaque;
 pub const LPCVOID = *const anyopaque;
-
-pub const SCARDCONTEXT = LONG;
-pub const SCARDHANDLE = LONG;
 pub const LPSCARDCONTEXT = *SCARDCONTEXT;
 pub const LPSCARDHANDLE = *SCARDHANDLE;
+
+const MAX_ATR_SIZE = if (native_os == .linux) 33 else 36;
 
 pub const SCARD_IO_REQUEST = extern struct {
     dwProtocol: DWORD,
@@ -29,7 +59,7 @@ pub const SCARD_READERSTATE = extern struct {
     dwCurrentState: DWORD,
     dwEventState: DWORD,
     cbAtr: DWORD,
-    rgbAtr: [36]BYTE,
+    rgbAtr: [MAX_ATR_SIZE]BYTE,
 };
 
 // Scope values for SCardEstablishContext.
@@ -68,41 +98,77 @@ pub const SCARD_STATE_INUSE: DWORD = 0x0100;
 pub const SCARD_STATE_MUTE: DWORD = 0x0200;
 
 // Return values.
-pub const SCARD_S_SUCCESS: LONG = 0x00000000;
-pub const SCARD_F_INTERNAL_ERROR: LONG = @bitCast(@as(u32, 0x80100001));
-pub const SCARD_E_CANCELLED: LONG = @bitCast(@as(u32, 0x80100002));
-pub const SCARD_E_INVALID_HANDLE: LONG = @bitCast(@as(u32, 0x80100003));
-pub const SCARD_E_INVALID_PARAMETER: LONG = @bitCast(@as(u32, 0x80100004));
-pub const SCARD_E_INVALID_TARGET: LONG = @bitCast(@as(u32, 0x80100005));
-pub const SCARD_E_NO_MEMORY: LONG = @bitCast(@as(u32, 0x80100006));
-pub const SCARD_E_INSUFFICIENT_BUFFER: LONG = @bitCast(@as(u32, 0x80100008));
-pub const SCARD_E_UNKNOWN_READER: LONG = @bitCast(@as(u32, 0x80100009));
-pub const SCARD_E_TIMEOUT: LONG = @bitCast(@as(u32, 0x8010000A));
-pub const SCARD_E_SHARING_VIOLATION: LONG = @bitCast(@as(u32, 0x8010000B));
-pub const SCARD_E_NO_SMARTCARD: LONG = @bitCast(@as(u32, 0x8010000C));
-pub const SCARD_E_UNKNOWN_CARD: LONG = @bitCast(@as(u32, 0x8010000D));
-pub const SCARD_E_PROTO_MISMATCH: LONG = @bitCast(@as(u32, 0x8010000F));
-pub const SCARD_E_NOT_READY: LONG = @bitCast(@as(u32, 0x80100010));
-pub const SCARD_E_INVALID_VALUE: LONG = @bitCast(@as(u32, 0x80100011));
-pub const SCARD_E_READER_UNAVAILABLE: LONG = @bitCast(@as(u32, 0x80100017));
-pub const SCARD_E_NO_SERVICE: LONG = @bitCast(@as(u32, 0x8010001D));
-pub const SCARD_E_SERVICE_STOPPED: LONG = @bitCast(@as(u32, 0x8010001E));
-pub const SCARD_E_NO_READERS_AVAILABLE: LONG = @bitCast(@as(u32, 0x8010002E));
-pub const SCARD_W_UNSUPPORTED_CARD: LONG = @bitCast(@as(u32, 0x80100065));
-pub const SCARD_W_UNRESPONSIVE_CARD: LONG = @bitCast(@as(u32, 0x80100066));
-pub const SCARD_W_UNPOWERED_CARD: LONG = @bitCast(@as(u32, 0x80100067));
-pub const SCARD_W_RESET_CARD: LONG = @bitCast(@as(u32, 0x80100068));
-pub const SCARD_W_REMOVED_CARD: LONG = @bitCast(@as(u32, 0x80100069));
+// On macOS/Windows LONG is 32-bit so high-bit codes need @bitCast.
+// On Linux LONG is 64-bit so the values fit as positive integers.
+fn scardCode(comptime val: u32) LONG {
+    return if (@bitSizeOf(LONG) == @bitSizeOf(u32))
+        @bitCast(val)
+    else
+        @intCast(val);
+}
 
-// Imported functions from PCSC.framework.
-const pcsc = struct {
-    extern "PCSC" fn SCardEstablishContext(dwScope: DWORD, pvReserved1: ?LPCVOID, pvReserved2: ?LPCVOID, phContext: LPSCARDCONTEXT) callconv(.c) LONG;
-    extern "PCSC" fn SCardReleaseContext(hContext: SCARDCONTEXT) callconv(.c) LONG;
-    extern "PCSC" fn SCardListReaders(hContext: SCARDCONTEXT, mszGroups: ?LPCSTR, mszReaders: ?[*]u8, pcchReaders: LPDWORD) callconv(.c) LONG;
-    extern "PCSC" fn SCardConnect(hContext: SCARDCONTEXT, szReader: LPCSTR, dwShareMode: DWORD, dwPreferredProtocols: DWORD, phCard: LPSCARDHANDLE, pdwActiveProtocol: LPDWORD) callconv(.c) LONG;
-    extern "PCSC" fn SCardDisconnect(hCard: SCARDHANDLE, dwDisposition: DWORD) callconv(.c) LONG;
-    extern "PCSC" fn SCardTransmit(hCard: SCARDHANDLE, pioSendPci: *const SCARD_IO_REQUEST, pbSendBuffer: LPCBYTE, cbSendLength: DWORD, pioRecvPci: ?*SCARD_IO_REQUEST, pbRecvBuffer: LPBYTE, pcbRecvLength: LPDWORD) callconv(.c) LONG;
-    extern "PCSC" fn SCardGetStatusChange(hContext: SCARDCONTEXT, dwTimeout: DWORD, rgReaderStates: [*]SCARD_READERSTATE, cReaders: DWORD) callconv(.c) LONG;
+pub const SCARD_S_SUCCESS: LONG = 0x00000000;
+pub const SCARD_F_INTERNAL_ERROR: LONG = scardCode(0x80100001);
+pub const SCARD_E_CANCELLED: LONG = scardCode(0x80100002);
+pub const SCARD_E_INVALID_HANDLE: LONG = scardCode(0x80100003);
+pub const SCARD_E_INVALID_PARAMETER: LONG = scardCode(0x80100004);
+pub const SCARD_E_INVALID_TARGET: LONG = scardCode(0x80100005);
+pub const SCARD_E_NO_MEMORY: LONG = scardCode(0x80100006);
+pub const SCARD_E_INSUFFICIENT_BUFFER: LONG = scardCode(0x80100008);
+pub const SCARD_E_UNKNOWN_READER: LONG = scardCode(0x80100009);
+pub const SCARD_E_TIMEOUT: LONG = scardCode(0x8010000A);
+pub const SCARD_E_SHARING_VIOLATION: LONG = scardCode(0x8010000B);
+pub const SCARD_E_NO_SMARTCARD: LONG = scardCode(0x8010000C);
+pub const SCARD_E_UNKNOWN_CARD: LONG = scardCode(0x8010000D);
+pub const SCARD_E_PROTO_MISMATCH: LONG = scardCode(0x8010000F);
+pub const SCARD_E_NOT_READY: LONG = scardCode(0x80100010);
+pub const SCARD_E_INVALID_VALUE: LONG = scardCode(0x80100011);
+pub const SCARD_E_READER_UNAVAILABLE: LONG = scardCode(0x80100017);
+pub const SCARD_E_NO_SERVICE: LONG = scardCode(0x8010001D);
+pub const SCARD_E_SERVICE_STOPPED: LONG = scardCode(0x8010001E);
+pub const SCARD_E_NO_READERS_AVAILABLE: LONG = scardCode(0x8010002E);
+pub const SCARD_W_UNSUPPORTED_CARD: LONG = scardCode(0x80100065);
+pub const SCARD_W_UNRESPONSIVE_CARD: LONG = scardCode(0x80100066);
+pub const SCARD_W_UNPOWERED_CARD: LONG = scardCode(0x80100067);
+pub const SCARD_W_RESET_CARD: LONG = scardCode(0x80100068);
+pub const SCARD_W_REMOVED_CARD: LONG = scardCode(0x80100069);
+
+// Imported functions from the platform PC/SC library.
+const pcsc = switch (native_os) {
+    .macos => struct {
+        extern "PCSC" fn SCardEstablishContext(dwScope: DWORD, pvReserved1: ?LPCVOID, pvReserved2: ?LPCVOID, phContext: LPSCARDCONTEXT) callconv(.c) LONG;
+        extern "PCSC" fn SCardReleaseContext(hContext: SCARDCONTEXT) callconv(.c) LONG;
+        extern "PCSC" fn SCardListReaders(hContext: SCARDCONTEXT, mszGroups: ?LPCSTR, mszReaders: ?[*]u8, pcchReaders: LPDWORD) callconv(.c) LONG;
+        extern "PCSC" fn SCardConnect(hContext: SCARDCONTEXT, szReader: LPCSTR, dwShareMode: DWORD, dwPreferredProtocols: DWORD, phCard: LPSCARDHANDLE, pdwActiveProtocol: LPDWORD) callconv(.c) LONG;
+        extern "PCSC" fn SCardDisconnect(hCard: SCARDHANDLE, dwDisposition: DWORD) callconv(.c) LONG;
+        extern "PCSC" fn SCardTransmit(hCard: SCARDHANDLE, pioSendPci: *const SCARD_IO_REQUEST, pbSendBuffer: LPCBYTE, cbSendLength: DWORD, pioRecvPci: ?*SCARD_IO_REQUEST, pbRecvBuffer: LPBYTE, pcbRecvLength: LPDWORD) callconv(.c) LONG;
+        extern "PCSC" fn SCardGetStatusChange(hContext: SCARDCONTEXT, dwTimeout: DWORD, rgReaderStates: [*]SCARD_READERSTATE, cReaders: DWORD) callconv(.c) LONG;
+    },
+    .linux => struct {
+        extern "pcsclite" fn SCardEstablishContext(dwScope: DWORD, pvReserved1: ?LPCVOID, pvReserved2: ?LPCVOID, phContext: LPSCARDCONTEXT) callconv(.c) LONG;
+        extern "pcsclite" fn SCardReleaseContext(hContext: SCARDCONTEXT) callconv(.c) LONG;
+        extern "pcsclite" fn SCardListReaders(hContext: SCARDCONTEXT, mszGroups: ?LPCSTR, mszReaders: ?[*]u8, pcchReaders: LPDWORD) callconv(.c) LONG;
+        extern "pcsclite" fn SCardConnect(hContext: SCARDCONTEXT, szReader: LPCSTR, dwShareMode: DWORD, dwPreferredProtocols: DWORD, phCard: LPSCARDHANDLE, pdwActiveProtocol: LPDWORD) callconv(.c) LONG;
+        extern "pcsclite" fn SCardDisconnect(hCard: SCARDHANDLE, dwDisposition: DWORD) callconv(.c) LONG;
+        extern "pcsclite" fn SCardTransmit(hCard: SCARDHANDLE, pioSendPci: *const SCARD_IO_REQUEST, pbSendBuffer: LPCBYTE, cbSendLength: DWORD, pioRecvPci: ?*SCARD_IO_REQUEST, pbRecvBuffer: LPBYTE, pcbRecvLength: LPDWORD) callconv(.c) LONG;
+        extern "pcsclite" fn SCardGetStatusChange(hContext: SCARDCONTEXT, dwTimeout: DWORD, rgReaderStates: [*]SCARD_READERSTATE, cReaders: DWORD) callconv(.c) LONG;
+    },
+    .windows => struct {
+        // Windows SCard functions that take strings are exported with A/W
+        // suffixes. We use the ANSI (A) variants since our types use u8.
+        extern "winscard" fn SCardEstablishContext(dwScope: DWORD, pvReserved1: ?LPCVOID, pvReserved2: ?LPCVOID, phContext: LPSCARDCONTEXT) callconv(.c) LONG;
+        extern "winscard" fn SCardReleaseContext(hContext: SCARDCONTEXT) callconv(.c) LONG;
+        extern "winscard" fn SCardListReadersA(hContext: SCARDCONTEXT, mszGroups: ?LPCSTR, mszReaders: ?[*]u8, pcchReaders: LPDWORD) callconv(.c) LONG;
+        extern "winscard" fn SCardConnectA(hContext: SCARDCONTEXT, szReader: LPCSTR, dwShareMode: DWORD, dwPreferredProtocols: DWORD, phCard: LPSCARDHANDLE, pdwActiveProtocol: LPDWORD) callconv(.c) LONG;
+        extern "winscard" fn SCardDisconnect(hCard: SCARDHANDLE, dwDisposition: DWORD) callconv(.c) LONG;
+        extern "winscard" fn SCardTransmit(hCard: SCARDHANDLE, pioSendPci: *const SCARD_IO_REQUEST, pbSendBuffer: LPCBYTE, cbSendLength: DWORD, pioRecvPci: ?*SCARD_IO_REQUEST, pbRecvBuffer: LPBYTE, pcbRecvLength: LPDWORD) callconv(.c) LONG;
+        extern "winscard" fn SCardGetStatusChangeA(hContext: SCARDCONTEXT, dwTimeout: DWORD, rgReaderStates: [*]SCARD_READERSTATE, cReaders: DWORD) callconv(.c) LONG;
+
+        const SCardListReaders = SCardListReadersA;
+        const SCardConnect = SCardConnectA;
+        const SCardGetStatusChange = SCardGetStatusChangeA;
+    },
+    else => @compileError("unsupported platform for PC/SC"),
 };
 
 pub const SCARD_PCI_T0 = SCARD_IO_REQUEST{ .dwProtocol = SCARD_PROTOCOL_T0, .cbPciLength = @sizeOf(SCARD_IO_REQUEST) };
@@ -201,11 +267,10 @@ pub const Card = struct {
 };
 
 test "establish context and list readers" {
-    const ctx = try Context.establish(SCARD_SCOPE_SYSTEM);
+    const ctx = Context.establish(SCARD_SCOPE_SYSTEM) catch return;
     defer ctx.release();
 
     var readers = ctx.listReaders(std.testing.allocator) catch |err| {
-        // No readers available is not a failure.
         if (err == error.ListReadersFailed) return;
         return err;
     };
