@@ -152,7 +152,7 @@ pub const Context = struct {
         for (buf[0..len], 0..) |c, i| {
             if (c == 0) {
                 if (i == start) break;
-                try readers.append(allocator, buf[start .. i :0]);
+                try readers.append(allocator, buf[start..i :0]);
                 start = i + 1;
             }
         }

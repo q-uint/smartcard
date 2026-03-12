@@ -1170,6 +1170,12 @@ pub const Library = struct {
         return info;
     }
 
+    pub fn initToken(self: *const Library, slot_id: CK_SLOT_ID, pin: []const u8, label: *[32]u8) !void {
+        const f = self.func_list.C_InitToken orelse return error.FunctionNotSupported;
+        const rv = f(slot_id, @constCast(pin.ptr), pin.len, label);
+        if (rv != CKR_OK) return error.InitTokenFailed;
+    }
+
     pub fn openSession(self: *const Library, slot_id: CK_SLOT_ID, flags: CK_FLAGS) !Session {
         const f = self.func_list.C_OpenSession orelse return error.FunctionNotSupported;
         var handle: CK_SESSION_HANDLE = undefined;
@@ -1197,9 +1203,15 @@ pub const Session = struct {
         return info;
     }
 
+    pub fn initPIN(self: Session, pin: []const u8) !void {
+        const f = self.lib.func_list.C_InitPIN orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, @constCast(pin.ptr), pin.len);
+        if (rv != CKR_OK) return error.InitPINFailed;
+    }
+
     pub fn login(self: Session, user_type: CK_USER_TYPE, pin: ?[]const u8) !void {
         const f = self.lib.func_list.C_Login orelse return error.FunctionNotSupported;
-        const pin_ptr: CK_UTF8CHAR_PTR = if (pin) |p| p.ptr else null;
+        const pin_ptr: CK_UTF8CHAR_PTR = if (pin) |p| @constCast(p.ptr) else null;
         const pin_len: CK_ULONG = if (pin) |p| p.len else 0;
         const rv = f(self.handle, user_type, pin_ptr, pin_len);
         if (rv != CKR_OK) return error.LoginFailed;
@@ -1247,7 +1259,7 @@ pub const Session = struct {
     pub fn sign(self: Session, data: []const u8, sig_buf: []u8) ![]u8 {
         const f = self.lib.func_list.C_Sign orelse return error.FunctionNotSupported;
         var sig_len: CK_ULONG = sig_buf.len;
-        const rv = f(self.handle, data.ptr, data.len, sig_buf.ptr, &sig_len);
+        const rv = f(self.handle, @constCast(data.ptr), data.len, sig_buf.ptr, &sig_len);
         if (rv != CKR_OK) return error.SignFailed;
         return sig_buf[0..sig_len];
     }
@@ -1260,27 +1272,360 @@ pub const Session = struct {
 
     pub fn verify(self: Session, data: []const u8, signature: []const u8) !void {
         const f = self.lib.func_list.C_Verify orelse return error.FunctionNotSupported;
-        const rv = f(self.handle, data.ptr, data.len, signature.ptr, signature.len);
+        const rv = f(self.handle, @constCast(data.ptr), data.len, @constCast(signature.ptr), signature.len);
         if (rv != CKR_OK) return error.VerifyFailed;
+    }
+
+    pub fn generateKeyPair(
+        self: Session,
+        mechanism: *CK_MECHANISM,
+        pub_template: []CK_ATTRIBUTE,
+        priv_template: []CK_ATTRIBUTE,
+    ) !struct { public_key: CK_OBJECT_HANDLE, private_key: CK_OBJECT_HANDLE } {
+        const f = self.lib.func_list.C_GenerateKeyPair orelse return error.FunctionNotSupported;
+        var pub_key: CK_OBJECT_HANDLE = undefined;
+        var priv_key: CK_OBJECT_HANDLE = undefined;
+        const rv = f(
+            self.handle,
+            mechanism,
+            pub_template.ptr,
+            pub_template.len,
+            priv_template.ptr,
+            priv_template.len,
+            &pub_key,
+            &priv_key,
+        );
+        if (rv != CKR_OK) return error.GenerateKeyPairFailed;
+        return .{ .public_key = pub_key, .private_key = priv_key };
+    }
+
+    pub fn generateKey(
+        self: Session,
+        mechanism: *CK_MECHANISM,
+        template: []CK_ATTRIBUTE,
+    ) !CK_OBJECT_HANDLE {
+        const f = self.lib.func_list.C_GenerateKey orelse return error.FunctionNotSupported;
+        var key: CK_OBJECT_HANDLE = undefined;
+        const rv = f(self.handle, mechanism, template.ptr, template.len, &key);
+        if (rv != CKR_OK) return error.GenerateKeyFailed;
+        return key;
+    }
+
+    pub fn encryptInit(self: Session, mechanism: *CK_MECHANISM, key: CK_OBJECT_HANDLE) !void {
+        const f = self.lib.func_list.C_EncryptInit orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, mechanism, key);
+        if (rv != CKR_OK) return error.EncryptInitFailed;
+    }
+
+    pub fn encrypt(self: Session, data: []const u8, out_buf: []u8) ![]u8 {
+        const f = self.lib.func_list.C_Encrypt orelse return error.FunctionNotSupported;
+        var out_len: CK_ULONG = out_buf.len;
+        const rv = f(self.handle, @constCast(data.ptr), data.len, out_buf.ptr, &out_len);
+        if (rv != CKR_OK) return error.EncryptFailed;
+        return out_buf[0..out_len];
+    }
+
+    pub fn decryptInit(self: Session, mechanism: *CK_MECHANISM, key: CK_OBJECT_HANDLE) !void {
+        const f = self.lib.func_list.C_DecryptInit orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, mechanism, key);
+        if (rv != CKR_OK) return error.DecryptInitFailed;
+    }
+
+    pub fn decrypt(self: Session, data: []const u8, out_buf: []u8) ![]u8 {
+        const f = self.lib.func_list.C_Decrypt orelse return error.FunctionNotSupported;
+        var out_len: CK_ULONG = out_buf.len;
+        const rv = f(self.handle, @constCast(data.ptr), data.len, out_buf.ptr, &out_len);
+        if (rv != CKR_OK) return error.DecryptFailed;
+        return out_buf[0..out_len];
+    }
+
+    pub fn destroyObject(self: Session, object: CK_OBJECT_HANDLE) !void {
+        const f = self.lib.func_list.C_DestroyObject orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, object);
+        if (rv != CKR_OK) return error.DestroyObjectFailed;
+    }
+
+    pub fn generateRandom(self: Session, buf: []u8) !void {
+        const f = self.lib.func_list.C_GenerateRandom orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, buf.ptr, buf.len);
+        if (rv != CKR_OK) return error.GenerateRandomFailed;
+    }
+
+    pub fn digestInit(self: Session, mechanism: *CK_MECHANISM) !void {
+        const f = self.lib.func_list.C_DigestInit orelse return error.FunctionNotSupported;
+        const rv = f(self.handle, mechanism);
+        if (rv != CKR_OK) return error.DigestInitFailed;
+    }
+
+    pub fn digest(self: Session, data: []const u8, out_buf: []u8) ![]u8 {
+        const f = self.lib.func_list.C_Digest orelse return error.FunctionNotSupported;
+        var out_len: CK_ULONG = out_buf.len;
+        const rv = f(self.handle, @constCast(data.ptr), data.len, out_buf.ptr, &out_len);
+        if (rv != CKR_OK) return error.DigestFailed;
+        return out_buf[0..out_len];
     }
 };
 
-test "load SoftHSM2, initialize, getInfo, finalize" {
+fn loadSoftHSM2() !Library {
     const path = std.posix.getenv("SOFTHSM2_PATH") orelse
         return error.SkipZigTest;
+    return Library.load(path);
+}
 
-    var lib = try Library.load(path);
+fn initTestToken(lib: *const Library) !struct { slot: CK_SLOT_ID, session: Session } {
+    const so_pin = "12345678";
+    const user_pin = "1234";
+
+    const slots = try lib.getSlotList(false);
+    defer lib.freeSlotList(slots);
+    if (slots.len == 0) return error.SkipZigTest;
+
+    const slot = slots[0];
+    var label: [32]u8 = undefined;
+    @memset(&label, ' ');
+    @memcpy(label[0..4], "test");
+    try lib.initToken(slot, so_pin, &label);
+
+    const session = try lib.openSession(slot, CKF_SERIAL_SESSION | CKF_RW_SESSION);
+    errdefer session.close() catch {};
+
+    try session.login(CKU_SO, so_pin);
+    try session.initPIN(user_pin);
+    try session.logout();
+
+    try session.login(CKU_USER, user_pin);
+
+    return .{ .slot = slot, .session = session };
+}
+
+test "load SoftHSM2, initialize, getInfo, finalize" {
+    var lib = try loadSoftHSM2();
     defer lib.close();
 
     try lib.initialize(null);
     defer lib.finalize() catch {};
 
     const info = try lib.getInfo();
-
-    // SoftHSM2 should report Cryptoki version 2.40
     try std.testing.expect(info.cryptokiVersion.major >= 2);
 
-    // manufacturerID should contain "SoftHSM"
     const mfr = std.mem.trimRight(u8, &info.manufacturerID, " ");
     try std.testing.expect(std.mem.indexOf(u8, mfr, "SoftHSM") != null);
+}
+
+test "SoftHSM2: init token, open session, login" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    const info = try t.session.getSessionInfo();
+    try std.testing.expectEqual(CKS_RW_USER_FUNCTIONS, info.state);
+}
+
+test "SoftHSM2: slot and token info" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    const slot_info = try lib.getSlotInfo(t.slot);
+    try std.testing.expect(slot_info.flags & CKF_TOKEN_PRESENT != 0);
+
+    const token_info = try lib.getTokenInfo(t.slot);
+    try std.testing.expect(token_info.flags & CKF_TOKEN_INITIALIZED != 0);
+    try std.testing.expect(token_info.flags & CKF_USER_PIN_INITIALIZED != 0);
+}
+
+test "SoftHSM2: mechanism list and info" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const slots = try lib.getSlotList(false);
+    defer lib.freeSlotList(slots);
+    if (slots.len == 0) return error.SkipZigTest;
+
+    const mechs = try lib.getMechanismList(slots[0]);
+    defer lib.freeMechanismList(mechs);
+    try std.testing.expect(mechs.len > 0);
+
+    // RSA key pair generation should be supported.
+    var found_rsa = false;
+    for (mechs) |m| {
+        if (m == CKM_RSA_PKCS_KEY_PAIR_GEN) {
+            found_rsa = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_rsa);
+
+    const info = try lib.getMechanismInfo(slots[0], CKM_RSA_PKCS_KEY_PAIR_GEN);
+    try std.testing.expect(info.flags & CKF_GENERATE_KEY_PAIR != 0);
+}
+
+test "SoftHSM2: generate random" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    var buf: [32]u8 = undefined;
+    @memset(&buf, 0);
+    try t.session.generateRandom(&buf);
+
+    // Extremely unlikely to be all zeros after filling with random.
+    var all_zero = true;
+    for (buf) |b| {
+        if (b != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    try std.testing.expect(!all_zero);
+}
+
+test "SoftHSM2: RSA key pair generation, sign, verify" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    var modulus_bits: CK_ULONG = 2048;
+    const pub_exp = [_]u8{ 0x01, 0x00, 0x01 }; // 65537
+    var pub_class = CKO_PUBLIC_KEY;
+    var priv_class = CKO_PRIVATE_KEY;
+    var key_type = CKK_RSA;
+    var ck_true = CK_TRUE;
+
+    var pub_template = [_]CK_ATTRIBUTE{
+        .{ .type = CKA_CLASS, .pValue = @ptrCast(&pub_class), .ulValueLen = @sizeOf(CK_OBJECT_CLASS) },
+        .{ .type = CKA_KEY_TYPE, .pValue = @ptrCast(&key_type), .ulValueLen = @sizeOf(CK_KEY_TYPE) },
+        .{ .type = CKA_MODULUS_BITS, .pValue = @ptrCast(&modulus_bits), .ulValueLen = @sizeOf(CK_ULONG) },
+        .{ .type = CKA_PUBLIC_EXPONENT, .pValue = @ptrCast(@constCast(&pub_exp)), .ulValueLen = pub_exp.len },
+        .{ .type = CKA_VERIFY, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+        .{ .type = CKA_TOKEN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+    };
+    var priv_template = [_]CK_ATTRIBUTE{
+        .{ .type = CKA_CLASS, .pValue = @ptrCast(&priv_class), .ulValueLen = @sizeOf(CK_OBJECT_CLASS) },
+        .{ .type = CKA_KEY_TYPE, .pValue = @ptrCast(&key_type), .ulValueLen = @sizeOf(CK_KEY_TYPE) },
+        .{ .type = CKA_SIGN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+        .{ .type = CKA_TOKEN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+    };
+
+    var mech = CK_MECHANISM{ .mechanism = CKM_RSA_PKCS_KEY_PAIR_GEN, .pParameter = null, .ulParameterLen = 0 };
+    const keys = try t.session.generateKeyPair(&mech, &pub_template, &priv_template);
+
+    // Sign with RSA-PKCS#1.
+    const message = "test message for signing";
+    var sign_mech = CK_MECHANISM{ .mechanism = CKM_RSA_PKCS, .pParameter = null, .ulParameterLen = 0 };
+    try t.session.signInit(&sign_mech, keys.private_key);
+    var sig_buf: [256]u8 = undefined;
+    const signature = try t.session.sign(message, &sig_buf);
+    try std.testing.expect(signature.len > 0);
+
+    // Verify.
+    try t.session.verifyInit(&sign_mech, keys.public_key);
+    try t.session.verify(message, signature);
+
+    // Cleanup.
+    try t.session.destroyObject(keys.public_key);
+    try t.session.destroyObject(keys.private_key);
+}
+
+test "SoftHSM2: find objects" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    // Generate a key so there's something to find.
+    var modulus_bits: CK_ULONG = 2048;
+    const pub_exp = [_]u8{ 0x01, 0x00, 0x01 };
+    var ck_true = CK_TRUE;
+    var pub_class = CKO_PUBLIC_KEY;
+    var priv_class = CKO_PRIVATE_KEY;
+    var key_type = CKK_RSA;
+
+    var pub_template = [_]CK_ATTRIBUTE{
+        .{ .type = CKA_CLASS, .pValue = @ptrCast(&pub_class), .ulValueLen = @sizeOf(CK_OBJECT_CLASS) },
+        .{ .type = CKA_KEY_TYPE, .pValue = @ptrCast(&key_type), .ulValueLen = @sizeOf(CK_KEY_TYPE) },
+        .{ .type = CKA_MODULUS_BITS, .pValue = @ptrCast(&modulus_bits), .ulValueLen = @sizeOf(CK_ULONG) },
+        .{ .type = CKA_PUBLIC_EXPONENT, .pValue = @ptrCast(@constCast(&pub_exp)), .ulValueLen = pub_exp.len },
+        .{ .type = CKA_VERIFY, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+        .{ .type = CKA_TOKEN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+    };
+    var priv_template = [_]CK_ATTRIBUTE{
+        .{ .type = CKA_CLASS, .pValue = @ptrCast(&priv_class), .ulValueLen = @sizeOf(CK_OBJECT_CLASS) },
+        .{ .type = CKA_KEY_TYPE, .pValue = @ptrCast(&key_type), .ulValueLen = @sizeOf(CK_KEY_TYPE) },
+        .{ .type = CKA_SIGN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+        .{ .type = CKA_TOKEN, .pValue = @ptrCast(&ck_true), .ulValueLen = @sizeOf(CK_BBOOL) },
+    };
+
+    var mech = CK_MECHANISM{ .mechanism = CKM_RSA_PKCS_KEY_PAIR_GEN, .pParameter = null, .ulParameterLen = 0 };
+    const keys = try t.session.generateKeyPair(&mech, &pub_template, &priv_template);
+
+    // Find all public keys.
+    var find_class = CKO_PUBLIC_KEY;
+    var find_template = [_]CK_ATTRIBUTE{
+        .{ .type = CKA_CLASS, .pValue = @ptrCast(&find_class), .ulValueLen = @sizeOf(CK_OBJECT_CLASS) },
+    };
+    try t.session.findObjectsInit(&find_template);
+    var handles: [16]CK_OBJECT_HANDLE = undefined;
+    const found = try t.session.findObjects(&handles);
+    try t.session.findObjectsFinal();
+
+    try std.testing.expect(found.len >= 1);
+
+    // Cleanup.
+    try t.session.destroyObject(keys.public_key);
+    try t.session.destroyObject(keys.private_key);
+}
+
+test "SoftHSM2: digest SHA-256" {
+    var lib = try loadSoftHSM2();
+    defer lib.close();
+    try lib.initialize(null);
+    defer lib.finalize() catch {};
+
+    const t = try initTestToken(&lib);
+    defer t.session.close() catch {};
+    defer t.session.logout() catch {};
+
+    var mech = CK_MECHANISM{ .mechanism = CKM_SHA256, .pParameter = null, .ulParameterLen = 0 };
+    try t.session.digestInit(&mech);
+
+    const data = "hello world";
+    var hash_buf: [32]u8 = undefined;
+    const hash = try t.session.digest(data, &hash_buf);
+    try std.testing.expectEqual(@as(usize, 32), hash.len);
+
+    // Known SHA-256 of "hello world".
+    const expected = [_]u8{
+        0xb9, 0x4d, 0x27, 0xb9, 0x93, 0x4d, 0x3e, 0x08,
+        0xa5, 0x2e, 0x52, 0xd7, 0xda, 0x7d, 0xab, 0xfa,
+        0xc4, 0x84, 0xef, 0xe3, 0x7a, 0x53, 0x80, 0xee,
+        0x90, 0x88, 0xf7, 0xac, 0xe2, 0xef, 0xcd, 0xe9,
+    };
+    try std.testing.expectEqualSlices(u8, &expected, hash);
 }
