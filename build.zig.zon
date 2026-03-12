@@ -1,0 +1,12 @@
+.{
+    .name = .smartcard,
+    .version = "0.0.0",
+    .fingerprint = 0x34e0b48fecc51fc3,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
